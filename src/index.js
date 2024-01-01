@@ -2,16 +2,11 @@ import * as THREE from "three";
 import TWEEN from "@tweenjs/tween.js";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
-import * as POSTPROCESSING from "postprocessing"
-import TextTexture from '@seregpie/three.text-texture';
-import { SSAOEffect } from "realism-effects"
 
 /////////////////////////////////////
 // LIST OF VOXEL MODELS TO EXHIBIT //
 /////////////////////////////////////
-const models = ["chr_knight", "bunker"]
+const models = ["bunker", "chr_knight"]
 var currentModelIdx = 0
 
 var currentModel
@@ -79,14 +74,9 @@ document.body.appendChild(renderer.domElement);
 
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.autoClear = false;
-
-const composer = new POSTPROCESSING.EffectComposer(renderer)
-const ssaoEffect = new SSAOEffect(composer, camera, scene)
-const effectPass = new POSTPROCESSING.EffectPass(camera, ssaoEffect)
-composer.addPass(effectPass)
-
-scene.background = new THREE.Color("#1f1f21");
+scene.background = new THREE.Color(0x1c1a1e);
 
 window.addEventListener("resize", onWindowResize);
 function onWindowResize() {
@@ -98,7 +88,7 @@ function onWindowResize() {
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableRotate = true;
-controls.maxDistance = 12.5;
+controls.maxDistance = 15.5;
 animate();
 
 // Main render loop
@@ -110,8 +100,8 @@ function animate(time) {
 	renderer.clear();
 	renderer.render(scene, camera);
 	renderer.render(secondaryScene, camera)
-}
 
+}
 
 function animMoveCamera(object) {
 	var targetTween = new TWEEN.Tween(controls.target)
@@ -151,6 +141,25 @@ function parseCSV(csvData) {
 	return result;
 }
 
+function addBlackOutlineToTexture(texture) {
+	var textureWidth = texture.image.width;
+	var textureHeight = texture.image.height;
+
+	var canvas = document.createElement('canvas');
+	canvas.width = textureWidth + 6; // Add 2 pixels for the black line
+	canvas.height = textureHeight + 6; // Add 2 pixels for the black line
+
+	var context = canvas.getContext('2d');
+	// draw the existing texture onto the canvas with a one pixel offset
+	context.fillRect(0, 0, canvas.width, canvas.height);
+	context.drawImage(texture.image, 3, 3, textureWidth, textureHeight);
+
+	var modifiedTexture = new THREE.Texture(canvas);
+	modifiedTexture.needsUpdate = true;
+	
+	return modifiedTexture;
+}
+
 function calcSunPosition(pitch, yaw, targetCoords) {
 	const outputTarget = targetCoords.clone();
 
@@ -174,48 +183,69 @@ async function loadModel(name) {
 	const screen = scene.getObjectByName("Screen");
 	
 	const textureLoader = new THREE.TextureLoader();
-	const texture = textureLoader.load(path + "render.png");
-	
-	screen.material.map = texture;
-	screen.material.emissiveMap = texture;
-	screen.material.emissive = new THREE.Color(0xffffff);
-	
-
-	const materialLoader = new MTLLoader();
-
-	materialLoader.load(path + "material.mtl", function (materials) {
-		const modelLoader =  new OBJLoader();
-		modelLoader.setMaterials(materials);
-
-		modelLoader.load(
-			path + "model.obj",
-			// called when resource is loaded
-			function ( object ) {
-				secondaryScene.remove(currentModel)
-
-				object.position.copy(hologram_origin)
-				object.rotateY(THREE.MathUtils.degToRad(180))
-				secondaryScene.add( object );
-				currentModel = object
-			},
-			// called when loading is in progresses
-			function ( xhr ) {
-				//pass
-			},
-			// called when loading has errors
-			function ( error ) {
-				console.log( error );
-			}
-		);
+	const texture = textureLoader.load(path + "render.png", function (borderlessTexture) {
+		const borderedTexture = addBlackOutlineToTexture(borderlessTexture);
+		borderedTexture.colorSpace = THREE.SRGBColorSpace;
+		var material = new THREE.MeshBasicMaterial({ map: borderedTexture, color: 0xffffff });
+		material.toneMapped = false;
+		screen.material = material;
+		borderedTexture.needsUpdate = true;
 	});
 
+	const modelLoader =  new GLTFLoader();
+	modelLoader.load(
+		path + "model.glb",
+		// called when resource is loaded
+		function ( gltf ) {
+			secondaryScene.remove(currentModel);
+
+			gltf.scene.position.copy(hologram_origin);
+			
+			var boundingBox = new THREE.Box3().setFromObject(gltf.scene);
+			var size = new THREE.Vector3();
+			boundingBox.getSize(size);
+
+			// Scale the model down so that it's no bigger than 6 on the x and z, but can be taller (12) on the y axis.
+			const largestDimension = Math.max(size.x, size.y, size.z);
+			let scaleValue;
+			if (largestDimension === size.y && size.y != size.x && size.y > 12) {
+				scaleValue = 12 / size.y;
+			} else {
+				scaleValue = (largestDimension > 6) ? (6 / largestDimension) : 1;
+			}
+
+			gltf.scene.scale.multiplyScalar(scaleValue);
+
+			gltf.scene.rotateY(THREE.MathUtils.degToRad(180))
+			secondaryScene.add( gltf.scene );
+			currentModel = gltf.scene
+		},
+		// called when loading is in progresses
+		function ( xhr ) {
+			//pass
+		},
+		// called when loading has errors
+		function ( error ) {
+			console.log( error );
+		}
+	);
+	let modelSunLight = secondaryScene.getObjectByName('modelSunLight');
+	let modelAmbientLight = secondaryScene.getObjectByName('modelAmbientLight');	
 
 	const lightInfoFileURL = path + "light_info.csv"
 	const lightingData = parseCSV(await loadFile(lightInfoFileURL))
 	// The first line of the light info file is the Sun light. ThreeJS doesn't have the same angle system MagicaVoxel does
 	// instead the light always points toward the target wherever it is. In order to mimic Magicavoxel, we set the target of the light
 	// to be our little voxel model, and then shoot the light outwards in the direction of the angle.
-	const modelSunLight = new THREE.DirectionalLight( new THREE.Color(lightingData[0].color), lightingData[1].strength * 5 );
+	if (!modelSunLight) {
+		modelSunLight = new THREE.DirectionalLight(new THREE.Color(lightingData[0].color), lightingData[1].strength * 5);
+		modelSunLight.name = 'modelSunLight';
+		secondaryScene.add(modelSunLight);
+	} else {
+		modelSunLight.color.set(lightingData[0].color);
+		modelSunLight.intensity = lightingData[1].strength * 5;
+	}
+	
 	
 	const [sunPitch, sunYaw] = lightingData[0].data.split(" ");
 	
@@ -225,7 +255,14 @@ async function loadModel(name) {
 	modelSunLight.castShadow = true;
 	
 	// The second line of the light info file is the ambient light. Multiplying strength by 1.3 to match magicavoxel somewhat
-	const modelAmbientLight = new THREE.AmbientLight( new THREE.Color(lightingData[1].color), lightingData[1].strength * 1.3 );
+	if (!modelAmbientLight) {
+		modelAmbientLight = new THREE.AmbientLight(new THREE.Color(lightingData[1].color), lightingData[1].strength * 1.3);
+		modelAmbientLight.name = 'modelAmbientLight';
+		secondaryScene.add(modelAmbientLight);
+	} else {
+		modelAmbientLight.color.set(lightingData[1].color);
+		modelAmbientLight.intensity = lightingData[1].strength * 1.3;
+	}
 	
 	secondaryScene.add(modelAmbientLight);
 	secondaryScene.add(modelSunLight);
