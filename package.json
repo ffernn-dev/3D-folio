@@ -1,0 +1,25 @@
+{
+  "name": "3d-folio",
+  "version": "1.0.0",
+  "description": "A silly little web app to display one's 3d model + render portfolio in a silly little way",
+  "scripts": {
+    "start": "parcel src/index.html",
+    "build": "parcel build src/index.html"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@seregpie/three.text-texture": "^3.2.1",
+    "@tweenjs/tween.js": "^21.0.0",
+    "postprocessing": "^6.34.1",
+    "realism-effects": "^1.1.2",
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "parcel": "^2.10.3",
+    "parcel-reporter-static-files-copy": "^1.5.3"
+  },
+  "staticFiles": {
+    "staticPath": "src/static"
+  }
+}
